@@ -255,4 +255,3 @@ class User(AbstractUser, SoftDeleteMixin):
             f"{self.employee_code} - "
             f"{self.get_full_name()}"
         )
-

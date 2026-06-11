@@ -18,6 +18,23 @@ schema_view = get_schema_view(
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/v1/auth/', include(('accounts.api.auth_urls', 'accounts_auth'), namespace='accounts_auth')),
+    path('api/v1/users/', include(('accounts.api.urls', 'accounts_users'), namespace='accounts_users')),
+    path('api/v1/departments/', include(('departments.api.urls', 'departments'), namespace='departments')),
+    path(
+        'api/v1/dept/design/',
+        include(('designations.api.urls', 'designations'),
+        namespace='designations')
+    ),
+    path(
+        'api/v1/dept/design/',
+        include(('core.api.urls', 'core'),
+        namespace='core')
+    ),
+    path(
+        'api/v1/dept/design/',
+        include(('payroll.api.urls', 'payroll'),
+        namespace='payroll')
+    ),
     path('swagger/', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
 ]
 

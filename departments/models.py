@@ -1,5 +1,5 @@
 from django.db import models
-
+from django.core.exceptions import ValidationError
 from accounts.models import SoftDeleteMixin
 
 
@@ -36,6 +36,29 @@ class Department(SoftDeleteMixin):
         db_column="head_user_id",
         help_text="Department head / reporting authority",
     )
+
+    def clean(self):
+        super().clean()
+
+        if self.head:
+            existing_department = Department.objects.filter(
+                head=self.head,
+                is_active=True
+            ).exclude(
+                pk=self.pk
+            ).first()
+
+            if existing_department:
+                raise ValidationError({
+                    "head": (
+                        f"{self.head.get_full_name()} is already assigned "
+                        f"as head of department '{existing_department.name}'."
+                    )
+                })
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = "dept_departments"
