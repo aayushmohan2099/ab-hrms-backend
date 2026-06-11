@@ -48,12 +48,21 @@ class CaptchaView(APIView):
         image = Image.new("RGB", (width, height), (255, 255, 255))
         draw = ImageDraw.Draw(image)
 
-        try:
-            # Assuming Red Hat/Linux environment based on standard paths
-            font = ImageFont.truetype(
-                "/usr/share/fonts/fira-code/FiraCode-Bold.ttf", 64
-            )
-        except:
+        font_paths = [
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+            "/usr/share/fonts/fira-code/FiraCode-Bold.ttf",
+        ]
+        
+        font = None
+        for path in font_paths:
+            try:
+                font = ImageFont.truetype(path, 54)
+                break
+            except IOError:
+                continue
+                
+        if not font:
             font = ImageFont.load_default()
 
         char_width = width // 8
@@ -61,21 +70,28 @@ class CaptchaView(APIView):
 
         for char in captcha_text:
             y_offset = random.randint(-5, 5)
-            char_image = Image.new("RGBA", (80, 80), (255, 255, 255, 0))
-            char_draw = ImageDraw.Draw(char_image)
-            char_draw.text((10, 5), char, font=font, fill=(20, 20, 20))
+            
+            # Use 'L' mode mask to prevent black box bug
+            mask = Image.new('L', (80, 80), 0)
+            mask_draw = ImageDraw.Draw(mask)
+            mask_draw.text((10, 5), char, font=font, fill=255)
 
-            rotated = char_image.rotate(random.randint(-15, 15), expand=1)
-            image.paste(rotated, (x, 15 + y_offset), rotated)
+            # Match reference rotation bounds (-15, 15)
+            rotated_mask = mask.rotate(random.randint(-15, 15), expand=1)
+
+            text_color = (20, 20, 20)
+            image.paste(text_color, (x, 15 + y_offset), rotated_mask)
 
             x += char_width
 
+        # Match reference dots
         for _ in range(150):
             draw.point(
                 (random.randint(0, width), random.randint(0, height)),
                 fill=(180, 180, 180),
             )
 
+        # Match reference exact single strike-through line
         draw.line(
             (0, random.randint(30, 70), width, random.randint(30, 70)),
             fill=(200, 200, 200),
@@ -89,7 +105,7 @@ class CaptchaView(APIView):
         img_str = base64.b64encode(buffer.getvalue()).decode()
 
         return Response({"image": f"data:image/png;base64,{img_str}"})
-
+    
 
 class LoginView(APIView):
     permission_classes = (permissions.AllowAny,)
