@@ -14,6 +14,9 @@ urlpatterns = [
     path('<int:dept_id>/runs/<int:id>/update/', views.PayrollRunUpdateView.as_view()),
     path('<int:dept_id>/runs/<int:id>/delete/', views.PayrollRunDeleteView.as_view()),
 
+    # Payroll Calculation Engine
+    path('<int:dept_id>/runs/<int:run_id>/generate/', views.GeneratePayrollRecordsView.as_view()),
+
     # Payroll Records (Nested under Runs)
     path('<int:dept_id>/runs/<int:run_id>/records/list/', views.PayrollRecordListView.as_view()),
     path('<int:dept_id>/runs/<int:run_id>/records/create/', views.PayrollRecordCreateView.as_view()),

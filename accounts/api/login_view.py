@@ -14,6 +14,8 @@ from rest_framework.response import Response
 from rest_framework import status, permissions
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 
+from departments.models import Department
+
 # Cookie name for storing refresh token (httpOnly)
 REFRESH_COOKIE_NAME = 'hrms_refresh'
 
@@ -186,16 +188,30 @@ class LoginView(APIView):
         # 4. Format Safe User Response
         # ---------------------------------
         
-        # Try to fetch the associated EmployeeProfile to get department/designation data
         department_id = None
         department_name = None
+
         try:
-            # We use hasattr to check if the reverse OneToOne relationship exists
-            if hasattr(user, 'employee_profile'):
+            # Employee Profile Mapping
+            if hasattr(user, "employee_profile") and user.employee_profile:
                 department_id = user.employee_profile.department_id
-                department_name = user.employee_profile.department.name
+
+                if user.employee_profile.department:
+                    department_name = user.employee_profile.department.name
+
+            # Department Head Mapping (Managers)
+            if not department_id:
+                department = Department.objects.filter(
+                    head=user,
+                    is_active=True
+                ).first()
+
+                if department:
+                    department_id = department.id
+                    department_name = department.name
+
         except Exception:
-            pass # Failsafe in case of database inconsistencies
+            pass
 
         user_data = {
             "id": user.id,
