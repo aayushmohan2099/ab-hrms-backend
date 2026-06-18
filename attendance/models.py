@@ -1,7 +1,81 @@
 from django.db import models
-
 from accounts.models import SoftDeleteMixin
 
+class LeaveApplication(SoftDeleteMixin):
+    """
+    Tracks leave requests submitted by employees.
+    """
+    LEAVE_TYPES = (
+        ("MATERNITY", "Maternity Leave (ML)"),
+        ("CASUAL", "Casual Leave (CL)"),
+        ("SICK", "Sick Leave (SL)"),
+    )
+    
+    STATUS_CHOICES = (
+        ("PENDING", "Pending"),
+        ("APPROVED", "Approved"),
+        ("REJECTED", "Rejected"),
+    )
+
+    employee = models.ForeignKey(
+        "employees.EmployeeProfile",
+        on_delete=models.CASCADE,
+        related_name="leave_applications"
+    )
+    leave_type = models.CharField(max_length=10, choices=LEAVE_TYPES)
+    start_date = models.DateField()
+    end_date = models.DateField()
+    reason = models.TextField()
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="PENDING")
+    
+    approved_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True, blank=True,
+        related_name="approved_leaves"
+    )
+    
+    class Meta:
+        db_table = "att_leave_applications"
+        ordering = ["-start_date"]
+
+    def __str__(self):
+        return f"{self.employee.user.employee_code} - {self.leave_type} ({self.start_date} to {self.end_date})"
+
+
+class DailyAttendance(SoftDeleteMixin):
+    """
+    Tracks the attendance status for a single employee on a specific date.
+    """
+    STATUS_CHOICES = (
+        ("PRESENT", "Present"),
+        ("ABSENT", "Absent"),
+        ("WEEKEND", "Weekend (Saturday/Sunday)"),
+        ("HOLIDAY", "Public Holiday"),
+        ("PAID_LEAVE", "Paid Leave"),
+        ("CASUAL_LEAVE", "Casual Leave"),
+        ("SICK_LEAVE", "Sick Leave"),
+    )
+
+    employee = models.ForeignKey(
+        "employees.EmployeeProfile",
+        on_delete=models.CASCADE,
+        related_name="daily_attendance"
+    )
+    date = models.DateField()
+    status = models.CharField(max_length=15, choices=STATUS_CHOICES, default="PRESENT")
+    
+    # Flag to tell the daily cron script to skip this row (e.g., if a manager manually changed it or a leave was approved)
+    is_locked = models.BooleanField(default=False)
+
+    class Meta:
+        db_table = "att_daily_records"
+        unique_together = [["employee", "date"]]
+        ordering = ["-date", "employee__user__employee_code"]
+
+    def __str__(self):
+        return f"{self.employee.user.employee_code} - {self.date} [{self.status}]"
+        
 
 class AttendanceUpload(SoftDeleteMixin):
     """

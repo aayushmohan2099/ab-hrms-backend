@@ -185,6 +185,18 @@ class LoginView(APIView):
         # ---------------------------------
         # 4. Format Safe User Response
         # ---------------------------------
+        
+        # Try to fetch the associated EmployeeProfile to get department/designation data
+        department_id = None
+        department_name = None
+        try:
+            # We use hasattr to check if the reverse OneToOne relationship exists
+            if hasattr(user, 'employee_profile'):
+                department_id = user.employee_profile.department_id
+                department_name = user.employee_profile.department.name
+        except Exception:
+            pass # Failsafe in case of database inconsistencies
+
         user_data = {
             "id": user.id,
             "username": user.username,
@@ -196,6 +208,8 @@ class LoginView(APIView):
             "employee_type": user.employee_type,
             "role_code": user.role.code if user.role else None,
             "role_name": user.role.name if user.role else None,
+            "department_id": department_id,        
+            "department_name": department_name,    
             "is_active": user.is_active,
             "th_urid": user.th_urid,
         }

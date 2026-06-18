@@ -19,7 +19,10 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/v1/auth/', include(('accounts.api.auth_urls', 'accounts_auth'), namespace='accounts_auth')),
     path('api/v1/users/', include(('accounts.api.urls', 'accounts_users'), namespace='accounts_users')),
+    path('api/v1/employees/', include(('employees.api.urls', 'employees'), namespace='employees')),
+    path('api/v1/attendance/', include(('attendance.api.urls', 'attendance'), namespace='attendance')),
     path('api/v1/departments/', include(('departments.api.urls', 'departments'), namespace='departments')),
+    path('api/v1/salary-slips/', include(('salary_slips.api.urls', 'salary_slips'), namespace='salary_slips')),
     path(
         'api/v1/dept/design/',
         include(('designations.api.urls', 'designations'),
