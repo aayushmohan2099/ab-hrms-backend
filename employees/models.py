@@ -79,6 +79,10 @@ class EmployeeProfile(SoftDeleteMixin):
         help_text="Gross base pay (Monthly Honorarium) in INR — the figure before any deductions",
     )
 
+    # ── Job Seeker Details ───────────────────────────────────────────────────
+    job_seeker_id = models.CharField(max_length=100, null=True, blank=True, db_column="job_seeker_id")
+    theme = models.TextField(null=True, blank=True, db_column="theme")
+
     # ── Bank Details ─────────────────────────────────────────────────────────
 
     bank_name = models.CharField(

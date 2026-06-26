@@ -44,6 +44,7 @@ class EmployeeProfileSerializer(serializers.ModelSerializer):
             
             'address', 'city', 'state', 'pincode',
             'emergency_contact_name', 'emergency_contact_phone', 'emergency_contact_relation',
+            'job_seeker_id', 'theme',
             
             'is_active', 'created_at', 'updated_at'
         ]
@@ -55,7 +56,7 @@ class EmployeeOneShotSerializer(serializers.ModelSerializer):
     """
     # User-specific fields MUST be write_only=True to prevent DRF from looking for them on EmployeeProfile during read phase
     first_name = serializers.CharField(max_length=150, write_only=True)
-    last_name = serializers.CharField(max_length=150, write_only=True)
+    last_name = serializers.CharField(max_length=150, required=False, allow_blank=True, write_only=True)
     email = serializers.EmailField(write_only=True)
     phone_number = serializers.CharField(max_length=15, required=False, allow_blank=True, write_only=True)
     employee_type = serializers.ChoiceField(choices=User.EMPLOYEE_TYPES, default="PERMANENT", write_only=True)
@@ -85,7 +86,8 @@ class EmployeeOneShotSerializer(serializers.ModelSerializer):
             'bank_name', 'bank_account_number', 'bank_ifsc', 'bank_branch',
             'pan_number', 'uan_number', 'esic_ip_number', 'aadhaar_number',
             'address', 'city', 'state', 'pincode',
-            'emergency_contact_name', 'emergency_contact_phone', 'emergency_contact_relation'
+            'emergency_contact_name', 'emergency_contact_phone', 'emergency_contact_relation',
+            'job_seeker_id', 'theme'
         ]
 
     def get_generated_password(self, obj):

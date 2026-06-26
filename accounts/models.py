@@ -205,6 +205,8 @@ class User(AbstractUser, SoftDeleteMixin):
         blank=True
     )
 
+    last_name = models.CharField(max_length=150, blank=True, null=True)
+
     phone_number = models.CharField(
         max_length=15,
         null=True,
