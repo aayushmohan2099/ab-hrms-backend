@@ -208,3 +208,45 @@ class EmployeeProfile(SoftDeleteMixin):
             f"{self.user.get_full_name()} "
             f"[{self.designation.name}]"
         )
+
+class TDSForm(SoftDeleteMixin):
+    """
+    Stores quarterly TDS Forms (PDFs) uploaded by the Admin.
+    Employees can only view and download their own records.
+    """
+    QUARTER_CHOICES = (
+        ("Q1", "Quarter 1"),
+        ("Q2", "Quarter 2"),
+        ("Q3", "Quarter 3"),
+        ("Q4", "Quarter 4"),
+    )
+
+    employee = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="tds_forms",
+        db_column="user_id"
+    )
+    financial_year = models.CharField(
+        max_length=9, 
+        help_text="e.g., 2025-2026",
+        db_column="financial_year"
+    )
+    quarter = models.CharField(
+        max_length=2, 
+        choices=QUARTER_CHOICES,
+        db_column="quarter"
+    )
+    form_pdf = models.FileField(
+        upload_to="tds_forms/%Y/",
+        db_column="form_pdf"
+    )
+
+    class Meta:
+        db_table = "tds_forms"
+        ordering = ["-created_at"]
+        # Prevents admin from accidentally uploading duplicate forms for the same quarter
+        unique_together = ["employee", "financial_year", "quarter"]
+
+    def __str__(self):
+        return f"{self.employee.employee_code} - TDS {self.financial_year} {self.quarter}"
