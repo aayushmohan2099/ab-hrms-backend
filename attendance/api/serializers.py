@@ -12,42 +12,58 @@ from employees.models import EmployeeProfile
 class DailyAttendanceSerializer(serializers.ModelSerializer):
     class Meta:
         model = DailyAttendance
-        fields = ['date', 'status', 'is_locked']
+        fields = ['date', 'status', 'is_locked', 'holiday_reason']
 
 
 class EmployeeMonthlyAttendanceSerializer(serializers.ModelSerializer):
     """
-    Returns an employee with their summarized present days and a list of all daily records 
-    for a specific month to feed into the GovCalendar frontend.
+    Returns an employee with their summarized present days, a list of all daily records, 
+    and detailed leave applications for a specific month.
     """
     employee_code = serializers.CharField(source='user.employee_code')
     first_name = serializers.CharField(source='user.first_name')
     last_name = serializers.CharField(source='user.last_name')
     designation_name = serializers.CharField(source='designation.name')
-    
+    total_leaves_this_month = serializers.IntegerField(read_only=True, default=0)
+
     # These fields will be dynamically populated in the view
     daily_records = serializers.SerializerMethodField()
     present_summary = serializers.SerializerMethodField()
+    current_month_records = serializers.SerializerMethodField()
 
     class Meta:
         model = EmployeeProfile
         fields = [
-            'id', 'employee_code', 'first_name', 'last_name', 
-            'designation_name', 'present_summary', 'daily_records'
+            'id', 'employee_code', 'first_name', 'last_name', 'theme',
+            'designation_name', 'present_summary', 'daily_records', 'total_leaves_this_month', 'current_month_records'
+        ]
+
+    def get_current_month_records(self, obj):
+        # Fetch the detailed leave applications attached dynamically in the view
+        leaves = getattr(obj, 'current_month_leave_applications', [])
+        return [
+            {
+                "id": leave.id,
+                "leave_type": leave.leave_type,
+                "start_date": leave.start_date,
+                "end_date": leave.end_date,
+                "reason": leave.reason,
+                "status": leave.status
+            }
+            for leave in leaves
         ]
 
     def get_daily_records(self, obj):
-        # The view will attach 'current_month_records' to the object
+        # The view attaches standard daily records to 'current_month_records' attr
         records = getattr(obj, 'current_month_records', [])
         return DailyAttendanceSerializer(records, many=True).data
 
     def get_present_summary(self, obj):
         records = getattr(obj, 'current_month_records', [])
-        total_days = len(records)
+        total_days = getattr(obj, 'total_days_in_month', len(records))
         # Count days that contribute to "Presence" / "Effective Days"
         present_count = sum(1 for r in records if r.status in ['PRESENT', 'PAID_LEAVE', 'HOLIDAY'])
         return f"{present_count}/{total_days}"
-
 
 # =====================================================
 # LEAVE APPLICATIONS

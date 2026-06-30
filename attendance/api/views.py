@@ -2,7 +2,10 @@
 import csv
 import io
 import requests
+import calendar
 from datetime import date, timedelta, datetime
+from django.db.models import Sum, Q, F
+from django.utils import timezone
 from calendar import monthrange
 from rest_framework import generics, status
 from rest_framework.views import APIView
@@ -10,8 +13,9 @@ from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.db import transaction
 from django.http import HttpResponse
+from rest_framework.permissions import IsAuthenticated
 
-from attendance.models import LeaveApplication, DailyAttendance, AttendanceUpload
+from attendance.models import *
 from employees.models import EmployeeProfile
 from departments.models import Department
 from .serializers import (
@@ -24,11 +28,12 @@ from .serializers import (
 # =====================================================
 # MONTHLY ATTENDANCE LISTING (API 1)
 # =====================================================
-
 class DepartmentMonthlyAttendanceView(APIView):
     """
     Accepts department_id, month, and year.
     Returns all employees in that department along with their daily attendance array.
+    Also calculates the total approved leaves taken by the employee in the specified month,
+    and provides the detailed leave application records for that month.
     """
     def get(self, request, dept_id):
         try:
@@ -43,11 +48,11 @@ class DepartmentMonthlyAttendanceView(APIView):
             is_active=True
         )
 
-        # Fetch all attendance records for this department for the given month/year
         start_date = date(year, month, 1)
         _, last_day = monthrange(year, month)
         end_date = date(year, month, last_day)
 
+        # Fetch all attendance records for this department for the given month/year
         daily_records = DailyAttendance.objects.filter(
             employee__department_id=dept_id,
             date__gte=start_date,
@@ -55,14 +60,41 @@ class DepartmentMonthlyAttendanceView(APIView):
             is_active=True
         ).order_by('date')
 
-        # Group records by employee ID
+        # Group daily records by employee ID
         records_by_emp = {}
         for record in daily_records:
             records_by_emp.setdefault(record.employee_id, []).append(record)
 
-        # Attach records to the employee instances temporarily for the serializer
+        # Fetch Approved Leaves overlapping with this month
+        approved_leaves = LeaveApplication.objects.filter(
+            employee__department_id=dept_id,
+            status="APPROVED",
+            start_date__lte=end_date,
+            end_date__gte=start_date,
+            is_active=True
+        )
+
+        # Calculate exact days overlapping in this specific month and group leave application details
+        leaves_by_emp = {}
+        leave_apps_by_emp = {}
+        for leave in approved_leaves:
+            # Group the detailed leave object
+            leave_apps_by_emp.setdefault(leave.employee_id, []).append(leave)
+
+            # Calculate total days overlapping
+            overlap_start = max(leave.start_date, start_date)
+            overlap_end = min(leave.end_date, end_date)
+            
+            if overlap_start <= overlap_end:
+                days_taken = (overlap_end - overlap_start).days + 1
+                leaves_by_emp[leave.employee_id] = leaves_by_emp.get(leave.employee_id, 0) + days_taken
+
+        # Attach records and leave counts to the employee instances temporarily for the serializer
         for emp in employees:
-            emp.current_month_records = records_by_emp.get(emp.id, [])
+            emp.current_month_records = records_by_emp.get(emp.id, []) # Used by get_daily_records and present_summary
+            emp.total_leaves_this_month = leaves_by_emp.get(emp.id, 0)
+            emp.current_month_leave_applications = leave_apps_by_emp.get(emp.id, []) # Used by get_current_month_records
+            emp.total_days_in_month = last_day
 
         serializer = EmployeeMonthlyAttendanceSerializer(employees, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -257,32 +289,64 @@ class MarkAbsentView(APIView):
 
 class BulkAttendanceUploadView(APIView):
     """
-    Uploads a CSV to bulk-replace attendance.
+    Uploads a CSV to bulk-replace attendance using a monthly matrix format.
     Automatically assigns WEEKEND for Saturdays/Sundays and fetches public
-    holidays from Nager.Date (free public API) to assign HOLIDAY.
-    Handles BOM and invisible whitespaces gracefully.
+    holidays from Nager.Date to assign HOLIDAY.
     """
+    # Mapping exact user inputs to Database STATUS_CHOICES
+    CODE_MAPPING = {
+        'P': 'PRESENT',
+        'A': 'ABSENT',
+        'EL': 'EARNED',
+        'CL': 'CASUAL',
+        'SL': 'SICK',
+        'LWP': 'LWP',
+        'ESL': 'ESL',
+    }
+
     def get(self, request):
         if request.query_params.get('download_format') == 'true':
+            try:
+                month = int(request.query_params.get('month', date.today().month))
+                year = int(request.query_params.get('year', date.today().year))
+            except ValueError:
+                return Response({"detail": "Invalid month or year."}, status=status.HTTP_400_BAD_REQUEST)
+
+            _, max_days = calendar.monthrange(year, month)
+
             response = HttpResponse(content_type='text/csv')
-            response['Content-Disposition'] = 'attachment; filename="attendance_bulk_upload_template.csv"'
+            response['Content-Disposition'] = f'attachment; filename="attendance_template_{year}_{month:02d}.csv"'
             
             writer = csv.writer(response)
-            # Standard format: Code, Date, Status
-            writer.writerow(['employee_code', 'date_YYYY_MM_DD', 'status_code'])
-            writer.writerow(['AB-IT-001', '2026-06-17', 'PRESENT'])
-            writer.writerow(['AB-IT-002', '2026-06-18', 'ABSENT'])
+            
+            # Header: S.no, employee_code, 1, 2, 3, ..., max_days
+            header = ['S.no', 'employee_code'] + [str(d) for d in range(1, max_days + 1)]
+            writer.writerow(header)
+            
+            # Example Row
+            example_row = ['1', 'AB-TEST-001'] + ['P'] * max_days
+            writer.writerow(example_row)
             
             return response
+            
         return Response({"detail": "Use ?download_format=true to get the template."}, status=status.HTTP_400_BAD_REQUEST)
 
     @transaction.atomic
     def post(self, request):
         file = request.FILES.get('file')
-        if not file:
-            return Response({"detail": "No file uploaded."}, status=status.HTTP_400_BAD_REQUEST)
+        month_str = request.data.get('month')
+        year_str = request.data.get('year')
 
-        valid_statuses = [c[0] for c in DailyAttendance.STATUS_CHOICES]
+        if not file or not month_str or not year_str:
+            return Response({"detail": "File, month, and year are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            month = int(month_str)
+            year = int(year_str)
+            _, max_days = calendar.monthrange(year, month)
+        except ValueError:
+            return Response({"detail": "Invalid month or year payload."}, status=status.HTTP_400_BAD_REQUEST)
+
         updated_count = 0
         errors = []
 
@@ -290,7 +354,7 @@ class BulkAttendanceUploadView(APIView):
             # Use utf-8-sig to automatically handle BOM (Byte Order Mark) from Windows Excel CSVs
             decoded_file = file.read().decode('utf-8-sig')
             
-            # Read CSV. Fallback to tab-delimiter if standard comma parsing finds only 1 giant column
+            # Read CSV. Fallback to tab-delimiter if standard comma parsing fails
             reader = csv.DictReader(io.StringIO(decoded_file))
             rows = list(reader)
             
@@ -301,79 +365,77 @@ class BulkAttendanceUploadView(APIView):
             if not rows:
                 return Response({"detail": "The uploaded file is empty."}, status=status.HTTP_400_BAD_REQUEST)
 
-            # 1. Extract unique years to fetch holidays efficiently
-            years_to_fetch = set()
-            for row in rows:
-                target_date_str = (row.get('date_YYYY_MM_DD') or '').strip()
-                if target_date_str:
-                    try:
-                        parsed_date = datetime.strptime(target_date_str, "%Y-%m-%d")
-                        years_to_fetch.add(parsed_date.year)
-                    except ValueError:
-                        pass # Handled during row processing
-
-            # 2. Fetch public holidays from Free API (No Auth Required)
+            # Fetch public holidays from Free API (No Auth Required)
             holidays_cache = set()
-            for year in years_to_fetch:
-                try:
-                    # Using Nager.Date API for India holidays
-                    resp = requests.get(f"https://date.nager.at/api/v3/PublicHolidays/{year}/IN", timeout=5)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        for holiday in data:
-                            if "date" in holiday:
-                                holidays_cache.add(holiday["date"])
-                    else:
-                        errors.append(f"Warning: Holiday API returned status {resp.status_code} for year {year}.")
-                except Exception as e:
-                    errors.append(f"Warning: Could not fetch holidays for year {year} ({str(e)}).")
+            try:
+                resp = requests.get(f"https://date.nager.at/api/v3/PublicHolidays/{year}/IN", timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for holiday in data:
+                        if "date" in holiday:
+                            holidays_cache.add(holiday["date"])
+                else:
+                    errors.append(f"Warning: Holiday API returned status {resp.status_code} for year {year}.")
+            except Exception as e:
+                errors.append(f"Warning: Could not fetch holidays for year {year} ({str(e)}).")
 
-            # 3. Process each row
+            # Pre-fetch active employees to minimize database hits inside the loop
+            active_employees = {
+                emp.user.employee_code: emp 
+                for emp in EmployeeProfile.objects.filter(is_active=True).select_related('user')
+            }
+
+            # Process each row
             for index, row in enumerate(rows):
                 code = (row.get('employee_code') or '').strip()
-                target_date_str = (row.get('date_YYYY_MM_DD') or '').strip()
-                status_code = (row.get('status_code') or '').strip().upper()
-
-                if not code or not target_date_str or not status_code:
-                    errors.append(f"Row {index + 2}: Missing required fields.")
-                    continue
                 
-                if status_code not in valid_statuses:
-                    errors.append(f"Row {index + 2}: Invalid status '{status_code}'. Must be one of {valid_statuses}.")
+                if not code:
+                    continue  # Skip rows without an employee code
+                
+                emp = active_employees.get(code)
+                if not emp:
+                    errors.append(f"Row {index + 2}: Active Employee '{code}' not found.")
                     continue
 
-                try:
-                    parsed_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+                # Iterate through day columns
+                for day in range(1, max_days + 1):
+                    val = (row.get(str(day)) or '').strip().upper()
                     
-                    # --- AUTOMATIC WEEKEND & HOLIDAY ASSIGNMENT ---
-                    # Check if weekend (5 = Saturday, 6 = Sunday)
-                    if parsed_date.weekday() >= 5:
-                        status_code = 'WEEKEND'
-                    # Check if public holiday
-                    elif target_date_str in holidays_cache:
-                        status_code = 'HOLIDAY'
+                    if not val:
+                        continue  # Skip empty cells
+                    
+                    status_code = self.CODE_MAPPING.get(val)
+                    if not status_code:
+                        errors.append(f"Row {index + 2}: Invalid attendance code '{val}' on Day {day}. Skipped.")
+                        continue
 
-                    emp = EmployeeProfile.objects.get(user__employee_code=code, is_active=True)
+                    target_date = date(year, month, day)
+                    target_date_str = target_date.strftime("%Y-%m-%d")
+
+                    # --- AUTOMATIC WEEKEND & HOLIDAY ASSIGNMENT ---
+                    if target_date.weekday() >= 5:  # 5 = Sat, 6 = Sun
+                        final_status = 'WEEKEND'
+                    elif target_date_str in holidays_cache:
+                        final_status = 'HOLIDAY'
+                    else:
+                        final_status = status_code
+
                     DailyAttendance.objects.update_or_create(
                         employee=emp,
-                        date=parsed_date,
+                        date=target_date,
                         defaults={
-                            'status': status_code,
-                            'is_locked': True, # Bulk uploads lock the row
+                            'status': final_status,
+                            'is_locked': True,  # Bulk uploads lock the row
                             'updated_by': request.user
                         }
                     )
                     updated_count += 1
-                except ValueError:
-                    errors.append(f"Row {index + 2}: Invalid date format '{target_date_str}'. Use YYYY-MM-DD.")
-                except EmployeeProfile.DoesNotExist:
-                    errors.append(f"Row {index + 2}: Employee {code} not found.")
 
         except Exception as e:
             return Response({"detail": f"Error parsing file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response({
-            "detail": f"Bulk upload processed. {updated_count} records updated.",
+            "detail": f"Bulk upload processed. {updated_count} daily records updated.",
             "errors": errors
         }, status=status.HTTP_200_OK)
     
@@ -401,6 +463,7 @@ class BulkMarkHolidaysView(APIView):
     def post(self, request):
         department_id = request.data.get('department_id')
         dates = request.data.get('dates', []) # Expected list of "YYYY-MM-DD" strings
+        holiday_reason = request.data.get('holiday_reason', '') # <-- ADDED: Extract reason
 
         if not department_id or not dates:
             return Response(
@@ -447,6 +510,7 @@ class BulkMarkHolidaysView(APIView):
                     date=target_date,
                     defaults={
                         'status': 'HOLIDAY',
+                        'holiday_reason': holiday_reason, # <-- ADDED: Save the reason
                         'is_locked': True, # Lock it so cron jobs or regular uploads don't override
                         'updated_by': request.user
                     }
@@ -456,3 +520,107 @@ class BulkMarkHolidaysView(APIView):
         return Response({
             "detail": f"Successfully marked {len(parsed_dates)} holiday(s) for {employees.count()} employee(s). Total records updated: {updated_count}."
         }, status=status.HTTP_200_OK)
+
+# Leave Balance API
+class EmployeeLeaveBalanceView(APIView):
+    """
+    Calculates and returns the leave balances for an employee for the CURRENT CALENDAR YEAR.
+    Automatically enforces the Casual Leave (CL) lapse rule across half-yearly cycles.
+    Format: "Leaves_left / Total Allowed"
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, employee_code):
+        employee = get_object_or_404(EmployeeProfile, user__employee_code=employee_code, is_active=True)
+        
+        current_date = timezone.now().date()
+        current_year = current_date.year
+        
+        # 1. Calendar year boundaries (Jan - Dec)
+        year_start = date(current_year, 1, 1)
+        year_end = date(current_year, 12, 31)
+        
+        # 2. Half-year boundaries (For specific CL lapsing rules)
+        h1_start = date(current_year, 1, 1)
+        h1_end = date(current_year, 6, 30)
+        h2_start = date(current_year, 7, 1)
+        h2_end = date(current_year, 12, 31)
+        
+        # 3. Fetch all Leave Limits from DB
+        limits = LeaveLimits.objects.filter(is_active=True)
+        limit_dict = {limit.leave_type: limit.leave_count for limit in limits}
+        
+        # 4. Fetch all APPROVED leaves overlapping with the current calendar year
+        approved_leaves = LeaveApplication.objects.filter(
+            employee=employee,
+            status="APPROVED",
+            start_date__lte=year_end,
+            end_date__gte=year_start,
+            is_active=True
+        )
+        
+        taken_dict = {lt[0]: 0 for lt in LeaveApplication.LEAVE_TYPES}
+        cl_taken_h1 = 0
+        cl_taken_h2 = 0
+        
+        # 5. Process overlapping days
+        for leave in approved_leaves:
+            # Overlap for the full year
+            overlap_start = max(leave.start_date, year_start)
+            overlap_end = min(leave.end_date, year_end)
+            
+            if overlap_start <= overlap_end:
+                days_taken = (overlap_end - overlap_start).days + 1
+                taken_dict[leave.leave_type] += days_taken
+                
+                # Custom Half-Yearly tracking for Casual Leave (CL)
+                if leave.leave_type == "CASUAL":
+                    # H1 overlap
+                    h1_os = max(leave.start_date, h1_start)
+                    h1_oe = min(leave.end_date, h1_end)
+                    if h1_os <= h1_oe:
+                        cl_taken_h1 += (h1_oe - h1_os).days + 1
+                        
+                    # H2 overlap
+                    h2_os = max(leave.start_date, h2_start)
+                    h2_oe = min(leave.end_date, h2_end)
+                    if h2_os <= h2_oe:
+                        cl_taken_h2 += (h2_oe - h2_os).days + 1
+        
+        # 6. Construct Final Balance Dictionary
+        response_data = {}
+        total_allowed_year = 0
+        total_leaves_left_year = 0
+        
+        for leave_type, limit in limit_dict.items():
+            if leave_type == "CASUAL":
+                # CL: Cannot carry forward to next 6 months.
+                half_limit = limit // 2  # Assuming 10 total -> 5 per half
+                rem_h1 = max(0, half_limit - cl_taken_h1)
+                rem_h2 = max(0, half_limit - cl_taken_h2)
+                
+                if current_date <= h1_end:
+                    # If in H1: You have H1 remainder, and H2 quota is untouched for later
+                    leaves_left = rem_h1 + half_limit
+                else:
+                    # If in H2: H1 remainder is permanently lapsed. Only H2 remainder counts
+                    leaves_left = rem_h2
+                    
+            else:
+                # All other leaves (including EL which carries forward internally within the year)
+                taken = taken_dict.get(leave_type, 0)
+                leaves_left = max(0, limit - taken)
+            
+            response_data[leave_type] = f"{leaves_left} / {limit}"
+            total_allowed_year += limit
+            total_leaves_left_year += leaves_left
+            
+        # Ensure all Leave Types exist in the response even if not strictly seeded in DB limits
+        for lt in LeaveApplication.LEAVE_TYPES:
+            l_type = lt[0]
+            if l_type not in response_data:
+                response_data[l_type] = "0 / 0"
+                
+        response_data["TOTAL"] = f"{total_leaves_left_year} / {total_allowed_year}"
+        
+        return Response(response_data, status=status.HTTP_200_OK)

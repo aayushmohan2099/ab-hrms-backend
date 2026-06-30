@@ -1,6 +1,28 @@
 from django.db import models
 from accounts.models import SoftDeleteMixin
 
+class LeaveLimits(SoftDeleteMixin):
+    """
+    Tracks leaves taken by employees.
+    """    
+    LEAVE_TYPES = (
+        ("MATERNITY", "Maternity Leave (ML)"),
+        ("CASUAL", "Casual Leave (CL)"),
+        ("SICK", "Sick Leave (SL)"),
+        ("EARNED", "Earned Leave (EL)"),
+        ("LWP", "Leave Without Pay (LWP)"),
+        ("ESL", "Extraordinary Sick Leave (ESL)"),
+    )
+    leave_type = models.CharField(max_length=10, choices=LEAVE_TYPES)
+    leave_count = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        db_table = "att_leave_limit"
+        ordering = ["-leave_count"]
+
+    def __str__(self):
+        return f"{self.leave_type} - {self.leave_count}"
+
 class LeaveApplication(SoftDeleteMixin):
     """
     Tracks leave requests submitted by employees.
@@ -9,6 +31,9 @@ class LeaveApplication(SoftDeleteMixin):
         ("MATERNITY", "Maternity Leave (ML)"),
         ("CASUAL", "Casual Leave (CL)"),
         ("SICK", "Sick Leave (SL)"),
+        ("EARNED", "Earned Leave (EL)"),
+        ("LWP", "Leave Without Pay (LWP)"),
+        ("ESL", "Extraordinary Sick Leave (ESL)"),
     )
     
     STATUS_CHOICES = (
@@ -64,7 +89,9 @@ class DailyAttendance(SoftDeleteMixin):
     )
     date = models.DateField()
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default="PRESENT")
-    
+
+    holiday_reason = models.CharField(max_length=150, null=True, blank=True)
+
     # Flag to tell the daily cron script to skip this row (e.g., if a manager manually changed it or a leave was approved)
     is_locked = models.BooleanField(default=False)
 

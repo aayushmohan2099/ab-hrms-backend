@@ -36,7 +36,7 @@ class EmployeeProfileSerializer(serializers.ModelSerializer):
             'department', 'department_name', 'department_code',
             'designation', 'designation_name', 'designation_code',
 
-            'date_of_joining', 'date_of_birth', 'date_of_leaving', 'gender',
+            'date_of_joining', 'date_of_birth', 'date_of_leaving', 'gender', 'caste_category',
             'monthly_honorarium', 
             
             'bank_name', 'bank_account_number', 'bank_ifsc', 'bank_branch',
@@ -82,7 +82,7 @@ class EmployeeOneShotSerializer(serializers.ModelSerializer):
 
             # EmployeeProfile native inputs
             'department', 'designation', 'date_of_joining', 'date_of_birth', 
-            'date_of_leaving', 'gender', 'monthly_honorarium', 
+            'date_of_leaving', 'gender', 'caste_category', 'monthly_honorarium', 
             'bank_name', 'bank_account_number', 'bank_ifsc', 'bank_branch',
             'pan_number', 'uan_number', 'esic_ip_number', 'aadhaar_number',
             'address', 'city', 'state', 'pincode',
@@ -206,7 +206,9 @@ class EmployeeOneShotSerializer(serializers.ModelSerializer):
             user.updated_by = self.context['request'].user
             user.save()
 
-        # Update remaining EmployeeProfile fields
+        # FIX: The caste_category field is native to EmployeeProfile. 
+        # Since we use `**validated_data` in create but iterate over it here, 
+        # we need to ensure the serializer explicitly allows it to be updated.
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
             

@@ -166,10 +166,11 @@ class PayrollRecordDeleteView(generics.DestroyAPIView):
 class GeneratePayrollRecordsView(APIView):
     """
     Triggers the calculation engine for a specific PayrollRun.
-    ABSENT days are immediate Loss of Pay.
-    CASUAL and SICK leaves draw from a 15-day Financial Year allowance.
-    Statutory Deductions (EPF, ESIC, TDS) are calculated on the Base Honorarium.
-    Loss of Pay (LOP) is deducted to calculate Final Net Pay.
+    Uses strict Calendar Year logic (Jan-Dec).
+    - ABSENT, unmarked days, and Leave Without Pay (LWP) are immediate Loss of Pay.
+    - EL, SL, CL, ESL draw from their respective Calendar Year / Half-Year allowances.
+    - Any leave taken beyond the strict allowance is converted to LOP.
+    - Statutory Deductions (EPF, ESIC, TDS) are calculated on the Base Honorarium.
     """
     @transaction.atomic
     def post(self, request, dept_id, run_id):
@@ -183,16 +184,14 @@ class GeneratePayrollRecordsView(APIView):
         _, total_days_in_month = calendar.monthrange(year, month)
         today = date.today()
 
-        # Determine Financial Year boundaries (April 1 to March 31)
-        if month >= 4:
-            fy_start_year = year
-        else:
-            fy_start_year = year - 1
-        fy_start_date = date(fy_start_year, 4, 1)
+        # Determine Calendar Year boundaries (Jan 1 to Dec 31)
+        cy_start_date = date(year, 1, 1)
+        h1_start = date(year, 1, 1)
+        h2_start = date(year, 7, 1)
 
-        # Determine end of previous month for historical count
+        # Determine end of previous month for historical YTD count
         if month == 1:
-            last_month_end = date(year - 1, 12, 31)
+            last_month_end = None # No history in this calendar year yet
         else:
             _, last_day_prev = calendar.monthrange(year, month - 1)
             last_month_end = date(year, month - 1, last_day_prev)
@@ -218,56 +217,86 @@ class GeneratePayrollRecordsView(APIView):
             att_records = DailyAttendance.objects.filter(
                 employee=emp, date__year=year, date__month=month, is_active=True
             )
+            
             prs_days = att_records.filter(status='PRESENT').count()
             weekends = att_records.filter(status='WEEKEND').count()
             holidays = att_records.filter(status='HOLIDAY').count()
-            cl_days = att_records.filter(status='CASUAL_LEAVE').count()
-            sl_days = att_records.filter(status='SICK_LEAVE').count()
-            pl_days = att_records.filter(status='PAID_LEAVE').count()
+            
+            # Safe __in queries to handle both model enum formats (CASUAL vs CASUAL_LEAVE)
+            cl_days = att_records.filter(status__in=['CASUAL', 'CASUAL_LEAVE']).count()
+            sl_days = att_records.filter(status__in=['SICK', 'SICK_LEAVE']).count()
+            el_days = att_records.filter(status__in=['EARNED', 'EARNED_LEAVE', 'PAID_LEAVE']).count()
+            esl_days = att_records.filter(status__in=['ESL', 'EXTRAORDINARY_SICK_LEAVE']).count()
+            lwp_days = att_records.filter(status__in=['LWP', 'LEAVE_WITHOUT_PAY']).count()
             absent_db = att_records.filter(status='ABSENT').count()
             
             remaining_days = 0
             if today.year == year and today.month == month and today.day < total_days_in_month:
                 remaining_days = total_days_in_month - today.day
             
-            explicit_days = prs_days + weekends + holidays + cl_days + sl_days + pl_days + absent_db + remaining_days
+            explicit_days = prs_days + weekends + holidays + cl_days + sl_days + el_days + esl_days + lwp_days + absent_db + remaining_days
             unmarked_past_days = max(0, total_days_in_month - explicit_days)
             
-            # Unauthorized absences (Immediate Loss of Pay)
-            current_month_absent_total = absent_db + unmarked_past_days
-            
-            # Authorized Leaves (Count against the 15-day allowance)
-            current_month_allowance_leaves = cl_days + sl_days
+            # Base Loss of Pay (Absences without approval + LWP)
+            base_lop_days = absent_db + unmarked_past_days + lwp_days
 
-            # 2. Historical Leave Usage (Authorized only)
-            historical_leaves_used = DailyAttendance.objects.filter(
-                employee=emp,
-                date__gte=fy_start_date,
-                date__lte=last_month_end,
-                status__in=['CASUAL_LEAVE', 'SICK_LEAVE'],
-                is_active=True
-            ).count()
+            # 2. Historical Leave Usage (Calendar Year bounds up to end of previous month)
+            hist_cl = 0
+            hist_el = 0
+            hist_sl = 0
+            hist_esl = 0
 
-            # 3. Pro-ration Logic
-            allowance_remaining = max(0, 15 - historical_leaves_used)
+            if last_month_end:
+                hist_qs = DailyAttendance.objects.filter(
+                    employee=emp,
+                    date__lte=last_month_end,
+                    is_active=True
+                )
+                
+                # EL, SL, ESL evaluate against the entire Calendar Year YTD
+                hist_el = hist_qs.filter(date__gte=cy_start_date, status__in=['EARNED', 'EARNED_LEAVE', 'PAID_LEAVE']).count()
+                hist_sl = hist_qs.filter(date__gte=cy_start_date, status__in=['SICK', 'SICK_LEAVE']).count()
+                hist_esl = hist_qs.filter(date__gte=cy_start_date, status__in=['ESL', 'EXTRAORDINARY_SICK_LEAVE']).count()
+                
+                # CL strictly evaluates against its isolated 6-month window (H1 or H2)
+                if month <= 6:
+                    hist_cl = hist_qs.filter(date__gte=h1_start, status__in=['CASUAL', 'CASUAL_LEAVE']).count()
+                else:
+                    hist_cl = hist_qs.filter(date__gte=h2_start, status__in=['CASUAL', 'CASUAL_LEAVE']).count()
+
+            # 3. Leave Rule Validation & Pro-ration Logic
             
-            # If they took more authorized leaves this month than they had left, the excess becomes deductible
-            excess_leaves_this_month = max(0, current_month_allowance_leaves - allowance_remaining)
+            # CL Rule: Max 5 days every 6 months. No carry forward to H2 or next year.
+            cl_remaining = max(0, 5 - hist_cl)
+            excess_cl = max(0, cl_days - cl_remaining)
             
-            # Total days to deduct salary for
-            total_deductible_days = current_month_absent_total + excess_leaves_this_month
+            # EL Rule: Max 5 days H1, 10 days YTD. Carries forward internally to H2.
+            el_annual_limit = 5 if month <= 6 else 10
+            el_remaining = max(0, el_annual_limit - hist_el)
+            excess_el = max(0, el_days - el_remaining)
+            
+            # SL Rule: Max 10 days per Calendar Year.
+            sl_remaining = max(0, 10 - hist_sl)
+            excess_sl = max(0, sl_days - sl_remaining)
+            
+            # ESL Rule: Max 60 days per Calendar Year.
+            esl_remaining = max(0, 60 - hist_esl)
+            excess_esl = max(0, esl_days - esl_remaining)
+            
+            # Sum up all deductible days (Base LOP + Extrapolated excesses)
+            total_deductible_days = base_lop_days + excess_cl + excess_el + excess_sl + excess_esl
             effective_days = max(0, total_days_in_month - total_deductible_days)
 
             base_gross = float(emp.monthly_honorarium or 0)
             per_day_pay = base_gross / total_days_in_month if total_days_in_month else 0
             
-            # Calculate Loss of Pay (LOP) amount
+            # Calculate Loss of Pay (LOP) financial amount
             lop_amount = round(total_deductible_days * per_day_pay, 2)
 
             # Gross pay is Base Honorarium minus LOP
             pro_rated_gross = max(0.0, round(base_gross - lop_amount, 2))
 
-            # 4. Calculate Statutory Deductions (Calculated on Base Honorarium)
+            # 4. Calculate Statutory Deductions (Strictly on Base Honorarium)
             epf_rate = float(structure.epf_rate) if rule and rule.applies_epf else 0
             esic_rate = float(structure.esic_rate) if rule and rule.applies_esic else 0
             tds_rate = float(structure.tds_rate) if rule and rule.applies_tds else 0
@@ -282,7 +311,7 @@ class GeneratePayrollRecordsView(APIView):
             net_pay = round(pro_rated_gross - emp_total_ded, 2)
             net_pay = max(0.0, net_pay) # Prevent negative salary
 
-            # 5. Save Record
+            # 5. Save/Overwrite Payroll Record for Employee
             PayrollRecord.objects.update_or_create(
                 payroll_run=run,
                 employee=emp,
@@ -307,7 +336,7 @@ class GeneratePayrollRecordsView(APIView):
             total_deductions += emp_total_ded
             total_net += net_pay
 
-        # Update Run Totals
+        # Update Master Run Totals
         run.total_gross = total_gross
         run.total_deductions = total_deductions
         run.total_net = total_net

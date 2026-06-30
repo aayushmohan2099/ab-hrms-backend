@@ -66,15 +66,20 @@ class BulkEmployeeCreateStreamView(APIView):
                         else:
                             val = str(v).strip()
                             
-                            # FIX: Handle CSV string dates like DD-MM-YYYY or DD/MM/YYYY
+                            # FIX: Handle CSV string dates
                             if val and k in ['date_of_joining', 'date_of_birth', 'date_of_leaving']:
                                 sep = '/' if '/' in val else '-'
                                 if sep in val:
                                     parts = val.split(sep)
-                                    # If the format looks like DD-MM-YYYY (parts[2] is year, parts[0] is day)
+                                    
+                                    # Format: DD-MM-YYYY or DD/MM/YYYY
                                     if len(parts) == 3 and len(parts[2]) == 4 and len(parts[0]) <= 2:
                                         val = f"{parts[2]}-{parts[1].zfill(2)}-{parts[0].zfill(2)}"
-
+                                        
+                                    # Format: YYYY-MM-DD or YYYY/MM/DD (Django's expected default)
+                                    elif len(parts) == 3 and len(parts[0]) == 4 and len(parts[2]) <= 2:
+                                        val = f"{parts[0]}-{parts[1].zfill(2)}-{parts[2].zfill(2)}"
+                                    
                         if val != "":
                             cleaned_data[k] = val
 

@@ -194,8 +194,7 @@ class User(AbstractUser, SoftDeleteMixin):
     EMPLOYEE_TYPES = (
         ("PERMANENT", "Permanent"),
         ("CONTRACT", "Contract"),
-        ("INTERN", "Intern"),
-        ("CONSULTANT", "Consultant"),
+        ("OUTSOURCED", "Out Sourced"),
     )
 
     employee_code = models.CharField(

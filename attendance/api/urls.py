@@ -26,4 +26,7 @@ urlpatterns = [
 
     # 7) Dept Manager Dashboard
     path('manager/dashboard-stats/', manager_views.ManagerDashboardStatsView.as_view(), name='manager-dashboard-stats'),
+
+    # 8) Employee Balance
+    path('leave-balance/<str:employee_code>/', views.EmployeeLeaveBalanceView.as_view(), name='leave-balance'),
 ]

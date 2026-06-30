@@ -70,6 +70,13 @@ class EmployeeProfile(SoftDeleteMixin):
         db_column="gender",
     )
 
+    caste_category = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        db_column="caste_category",
+    )    
+
     # ── Monthly Honorarium ───────────────────────────────────────────────────
 
     monthly_honorarium = models.DecimalField(
