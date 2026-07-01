@@ -1,5 +1,6 @@
 # accounts/api/serializers.py
 import random
+from django.utils import timezone
 from rest_framework import serializers
 from accounts.models import User, Role
 from departments.models import Department
@@ -12,12 +13,26 @@ class RoleSerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     """Serializer for retrieving, listing, and updating user details."""
     role_detail = RoleSerializer(source='role', read_only=True)
+    
+    # 1. Custom Write-Only Parameter for Password Updates via PATCH
+    set_new_password = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
 
     class Meta:
         model = User
         exclude = ['password', 'user_permissions', 'groups']
         read_only_fields = ['employee_code', 'th_urid', 'created_at', 'updated_at', 'deleted_at', 'created_by', 'updated_by', 'deleted_by']
 
+    def update(self, instance, validated_data):
+        # 2. Intercept the custom parameter before updating the rest of the model
+        new_password = validated_data.pop('set_new_password', None)
+        
+        if new_password:
+            instance.set_password(new_password)
+            instance.last_password_changed_at = timezone.now()
+            
+        # 3. Proceed with saving the rest of the fields
+        return super().update(instance, validated_data)
+    
 class UserCreateSerializer(serializers.ModelSerializer):
     """Serializer specifically for handling User Creation with auto-generation logic."""
     department_id = serializers.IntegerField(write_only=True)

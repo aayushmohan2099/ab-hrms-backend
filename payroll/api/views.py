@@ -301,9 +301,9 @@ class GeneratePayrollRecordsView(APIView):
             esic_rate = float(structure.esic_rate) if rule and rule.applies_esic else 0
             tds_rate = float(structure.tds_rate) if rule and rule.applies_tds else 0
 
-            epf_amt = round(base_gross * (epf_rate / 100), 2)
-            esic_amt = round(base_gross * (esic_rate / 100), 2)
-            tds_amt = round(base_gross * (tds_rate / 100), 2)
+            epf_amt = round(pro_rated_gross * (epf_rate / 100), 2)
+            esic_amt = round(pro_rated_gross * (esic_rate / 100), 2)
+            tds_amt = round(pro_rated_gross * (tds_rate / 100), 2)
             
             emp_total_ded = epf_amt + esic_amt + tds_amt
             

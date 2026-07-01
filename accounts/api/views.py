@@ -6,6 +6,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 
 from accounts.models import User
 from .serializers import UserSerializer, UserCreateSerializer
@@ -100,6 +101,39 @@ class UserUpdateView(generics.UpdateAPIView):
 
     def perform_update(self, serializer):
         serializer.save(updated_by=self.request.user)
+
+
+class UserChangePasswordView(APIView):
+    """Dedicated endpoint for a user to safely change their own password."""
+    
+    def post(self, request, id):
+        user = get_object_or_404(User, id=id, is_active=True)
+        
+        old_password = request.data.get('old_password')
+        new_password = request.data.get('new_password')
+
+        if not old_password or not new_password:
+            return Response(
+                {"detail": "Both old and new passwords are required."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate the old password
+        if not user.check_password(old_password):
+            return Response(
+                {"detail": "Incorrect current password."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Apply new password
+        user.set_password(new_password)
+        user.last_password_changed_at = timezone.now()
+        user.save(update_fields=['password', 'last_password_changed_at'])
+
+        return Response(
+            {"detail": "Password successfully updated."}, 
+            status=status.HTTP_200_OK
+        )
 
 
 class UserDeleteView(generics.DestroyAPIView):

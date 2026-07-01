@@ -14,6 +14,7 @@ urlpatterns = [
     
     # 6) Update user (PATCH mapping for partial updates)
     path('<int:id>/update/', views.UserUpdateView.as_view(), name='user-update'),
+    path('<int:id>/change-password/', views.UserChangePasswordView.as_view(), name='user-change-password'),
     
     # 5) Delete user (Soft Delete)
     path('<int:id>/delete/', views.UserDeleteView.as_view(), name='user-delete'),

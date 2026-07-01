@@ -302,6 +302,8 @@ class BulkAttendanceUploadView(APIView):
         'SL': 'SICK',
         'LWP': 'LWP',
         'ESL': 'ESL',
+        'H': 'HOLIDAY',   # Added H for HOLIDAY
+        'W': 'WEEKEND',   # Added W for WEEKEND
     }
 
     def get(self, request):
@@ -385,6 +387,22 @@ class BulkAttendanceUploadView(APIView):
                 for emp in EmployeeProfile.objects.filter(is_active=True).select_related('user')
             }
 
+            # Pre-fetch existing attendance records to prevent overwriting existing holidays
+            start_date = date(year, month, 1)
+            end_date = date(year, month, max_days)
+            existing_records = DailyAttendance.objects.filter(
+                employee__in=active_employees.values(),
+                date__range=(start_date, end_date)
+            ).values('employee__user__employee_code', 'date', 'status')
+            
+            existing_map = {}
+            for rec in existing_records:
+                emp_code = rec['employee__user__employee_code']
+                date_str = rec['date'].strftime("%Y-%m-%d")
+                if emp_code not in existing_map:
+                    existing_map[emp_code] = {}
+                existing_map[emp_code][date_str] = rec['status']
+
             # Process each row
             for index, row in enumerate(rows):
                 code = (row.get('employee_code') or '').strip()
@@ -412,8 +430,16 @@ class BulkAttendanceUploadView(APIView):
                     target_date = date(year, month, day)
                     target_date_str = target_date.strftime("%Y-%m-%d")
 
+                    # 1) If a holiday/weekend pattern exists in the DB, DO NOT OVERWRITE IT!
+                    existing_status = existing_map.get(code, {}).get(target_date_str)
+                    if existing_status in ['HOLIDAY', 'WEEKEND'] and status_code not in ['HOLIDAY', 'WEEKEND']:
+                        continue
+
                     # --- AUTOMATIC WEEKEND & HOLIDAY ASSIGNMENT ---
-                    if target_date.weekday() >= 5:  # 5 = Sat, 6 = Sun
+                    # 2) User can explicitly mark 'H' or 'W' which takes priority over auto-generation
+                    if status_code in ['HOLIDAY', 'WEEKEND']:
+                        final_status = status_code
+                    elif target_date.weekday() >= 5:  # 5 = Sat, 6 = Sun
                         final_status = 'WEEKEND'
                     elif target_date_str in holidays_cache:
                         final_status = 'HOLIDAY'
@@ -458,6 +484,7 @@ class BulkMarkHolidaysView(APIView):
     Accepts department_id, year, month, and a list of dates.
     Iterates through ALL active employees in the specified department
     and marks the given dates as 'HOLIDAY' in their DailyAttendance.
+    Employees whose date_of_joining is AFTER the holiday date are skipped.
     """
     @transaction.atomic
     def post(self, request):
@@ -505,6 +532,10 @@ class BulkMarkHolidaysView(APIView):
         # Mark holiday for each employee for each date
         for emp in employees:
             for target_date in parsed_dates:
+                # Ensure the employee had joined on or before the holiday date
+                if emp.date_of_joining and emp.date_of_joining > target_date:
+                    continue  # Skip marking holiday if they joined after this date
+
                 DailyAttendance.objects.update_or_create(
                     employee=emp,
                     date=target_date,
@@ -518,7 +549,7 @@ class BulkMarkHolidaysView(APIView):
                 updated_count += 1
 
         return Response({
-            "detail": f"Successfully marked {len(parsed_dates)} holiday(s) for {employees.count()} employee(s). Total records updated: {updated_count}."
+            "detail": f"Successfully marked {len(parsed_dates)} holiday(s) for eligible employee(s). Total records updated: {updated_count}."
         }, status=status.HTTP_200_OK)
 
 # Leave Balance API
@@ -621,6 +652,8 @@ class EmployeeLeaveBalanceView(APIView):
             if l_type not in response_data:
                 response_data[l_type] = "0 / 0"
                 
+        total_leaves_left_year = total_leaves_left_year - 60                
+        total_allowed_year = total_allowed_year - 60                
         response_data["TOTAL"] = f"{total_leaves_left_year} / {total_allowed_year}"
         
         return Response(response_data, status=status.HTTP_200_OK)
