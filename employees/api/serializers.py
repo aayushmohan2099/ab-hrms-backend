@@ -159,8 +159,16 @@ class EmployeeOneShotSerializer(serializers.ModelSerializer):
 
         # 4. Create User Account
         username = employee_code
-        random_digits = f"{random.randint(100, 999)}"
-        raw_password = f"{username}@{random_digits}"
+
+        # Password format: <Department.code>@<last 4 digits of phone number>
+        phone_number = (user_data.get("phone_number") or "").strip()
+
+        if len(phone_number) >= 4:
+            last_four = phone_number[-4:]
+        else:
+            last_four = phone_number.zfill(4)  # Pads with leading zeros if needed
+
+        raw_password = f"{department.code}@{last_four}"
 
         user = User.objects.create_user(
             username=username,

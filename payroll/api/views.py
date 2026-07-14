@@ -6,20 +6,16 @@ from rest_framework.response import Response
 from rest_framework import status
 from django.db import transaction
 
-from core.models import SalaryStructure
+from core.models import *
 from employees.models import EmployeeProfile
 from attendance.models import DailyAttendance
 from rest_framework import generics
 from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
-from payroll.models import DesignationPayrollRule, PayrollRun, PayrollRecord
+from payroll.models import *
 from departments.models import Department
-from .serializers import (
-    DesignationPayrollRuleSerializer, 
-    PayrollRunSerializer, 
-    PayrollRecordSerializer
-)
+from .serializers import *
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 20
@@ -296,7 +292,21 @@ class GeneratePayrollRecordsView(APIView):
             # Gross pay is Base Honorarium minus LOP
             pro_rated_gross = max(0.0, round(base_gross - lop_amount, 2))
 
-            # 4. Calculate Statutory Deductions (Strictly on Base Honorarium)
+            # 4. Calculate Statutory Deductions
+            
+            # Get the first day of the payroll month
+            payroll_month_start = date(year, month, 1)
+            
+            # Look for an active custom structure valid for this payroll month
+            custom_structure = CustomSalaryStructure.objects.filter(
+                employee=emp,
+                is_active=True,
+                effective_from__lte=payroll_month_start
+            ).filter(
+                models.Q(effective_to__isnull=True) | models.Q(effective_to__gte=payroll_month_start)
+            ).order_by('-effective_from').first()
+
+            # First, calculate the standard amounts based on Designation rules & Dept rates
             epf_rate = float(structure.epf_rate) if rule and rule.applies_epf else 0
             esic_rate = float(structure.esic_rate) if rule and rule.applies_esic else 0
             tds_rate = float(structure.tds_rate) if rule and rule.applies_tds else 0
@@ -304,6 +314,17 @@ class GeneratePayrollRecordsView(APIView):
             epf_amt = round(pro_rated_gross * (epf_rate / 100), 2)
             esic_amt = round(pro_rated_gross * (esic_rate / 100), 2)
             tds_amt = round(pro_rated_gross * (tds_rate / 100), 2)
+
+            # Override standard amounts ONLY IF the custom structure explicitly defines a non-zero value
+            # (Assuming a defined custom amount > 0 implies an override. If 0 is a valid override, 
+            # you might need to check for None, but Django DecimalFields default to 0.00).
+            if custom_structure:
+                if custom_structure.epf_amount > 0:
+                    epf_amt = float(custom_structure.epf_amount)
+                if custom_structure.esic_amount > 0:
+                    esic_amt = float(custom_structure.esic_amount)
+                if custom_structure.tds_amount > 0:
+                    tds_amt = float(custom_structure.tds_amount)
             
             emp_total_ded = epf_amt + esic_amt + tds_amt
             
