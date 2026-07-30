@@ -31,7 +31,7 @@ class EmployeeProfileListView(generics.ListAPIView):
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_class = EmployeeProfileFilter
     
-    search_fields = ['user__first_name', 'user__last_name', 'user__phone_number', 'pincode', 'city', 'state']
+    search_fields = ['user__first_name', 'user__last_name', 'user__phone_number', 'user__employee_code', 'pincode', 'city', 'state']
     ordering_fields = ['date_of_joining', 'user__first_name', 'department__name']
 
     def get_queryset(self):

@@ -14,16 +14,12 @@ from django.shortcuts import get_object_or_404
 from django.db import transaction
 from django.http import HttpResponse
 from rest_framework.permissions import IsAuthenticated
+from django.db.models import Prefetch
 
 from attendance.models import *
 from employees.models import EmployeeProfile
 from departments.models import Department
-from .serializers import (
-    LeaveApplicationBaseSerializer, 
-    LeaveApplicationComprehensiveSerializer,
-    LeaveApplicationDeepDetailSerializer,
-    EmployeeMonthlyAttendanceSerializer
-)
+from .serializers import *
 
 # =====================================================
 # MONTHLY ATTENDANCE LISTING (API 1)
@@ -594,7 +590,7 @@ class EmployeeLeaveBalanceView(APIView):
         cl_taken_h1 = 0
         cl_taken_h2 = 0
         
-        # 5. Process overlapping days
+        # 5. Process overlapping days from Leave Applications
         for leave in approved_leaves:
             # Overlap for the full year
             overlap_start = max(leave.start_date, year_start)
@@ -617,6 +613,29 @@ class EmployeeLeaveBalanceView(APIView):
                     h2_oe = min(leave.end_date, h2_end)
                     if h2_os <= h2_oe:
                         cl_taken_h2 += (h2_oe - h2_os).days + 1
+
+        # ---> NEW SURGICAL ADDITION: Process Bulk Upload AttendanceRecords <---
+        # Fetch verified/uploaded attendance records for this calendar year
+        att_records = AttendanceRecord.objects.filter(
+            employee=employee,
+            upload__att_year=current_year,
+            is_active=True
+        ).select_related('upload')
+
+        for att in att_records:
+            month = att.upload.att_month
+            
+            # Map standard record fields to the tracking dictionary
+            taken_dict["CASUAL"] += att.casual_leave
+            taken_dict["SICK"] += att.sick_leave
+            taken_dict["EARNED"] += att.paid_leave  # Assuming paid_leave maps to EARNED limit
+            
+            # Apply CL H1/H2 rules based on the upload month
+            if month <= 6:
+                cl_taken_h1 += att.casual_leave
+            else:
+                cl_taken_h2 += att.casual_leave
+        # ---> END SURGICAL ADDITION <---
         
         # 6. Construct Final Balance Dictionary
         response_data = {}
@@ -657,3 +676,52 @@ class EmployeeLeaveBalanceView(APIView):
         response_data["TOTAL"] = f"{total_leaves_left_year} / {total_allowed_year}"
         
         return Response(response_data, status=status.HTTP_200_OK)
+
+# Per employee calendar view
+class EmployeeMonthlyAttendanceView(APIView):
+    """
+    Fetches all daily attendance records and approved leave applications 
+    for a specific employee for a given month and year.
+    Designed for calendar rendering on the frontend.
+    """
+    def get(self, request, emp_code, year, month):
+        # 1. Verify Employee exists and is active
+        emp = get_object_or_404(EmployeeProfile, user__employee_code=emp_code, is_active=True)
+
+        # 2. Fetch Daily Records for the specified month
+        daily_records = DailyAttendance.objects.filter(
+            employee=emp,
+            date__year=year,
+            date__month=month,
+            is_active=True
+        ).order_by('date')
+
+        # Dynamically get the last day of the month to prevent "invalid date" validation errors (e.g. June 31st)
+        _, last_day = calendar.monthrange(year, month)
+
+        # 3. Fetch Leave Applications that overlap with the specified month
+        # We want leaves where the start_date is in this month, 
+        # OR the end_date is in this month,
+        # OR the leave spans entirely over this month.
+        leave_apps = LeaveApplication.objects.filter(
+            employee=emp,
+            status='APPROVED',
+            is_active=True
+        ).filter(
+            # Start date is in the target month/year
+            models.Q(start_date__year=year, start_date__month=month) |
+            # End date is in the target month/year
+            models.Q(end_date__year=year, end_date__month=month) |
+            # Target month/year is completely enclosed within the leave dates
+            models.Q(start_date__lt=f"{year}-{month:02d}-01", end_date__gt=f"{year}-{month:02d}-{last_day:02d}") 
+        )
+
+        # 4. Serialize data - USING THE CORRECT SERIALIZERS
+        records_data = DailyAttendanceSerializer(daily_records, many=True).data
+        leaves_data = LeaveApplicationBaseSerializer(leave_apps, many=True).data
+
+        # Safe Object Response:
+        return Response({
+            "daily_records": records_data, # Use this for setCurrentRecords(data.daily_records)
+            "current_month_records": leaves_data # Used for setCurrentLeaveApps(data.current_month_records)
+        }, status=status.HTTP_200_OK)

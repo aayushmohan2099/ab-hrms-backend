@@ -29,4 +29,7 @@ urlpatterns = [
 
     # 8) Employee Balance
     path('leave-balance/<str:employee_code>/', views.EmployeeLeaveBalanceView.as_view(), name='leave-balance'),
+
+    # 9) Employee Calendar view,
+    path('emp/monthly-attendance/<str:emp_code>/<int:year>/<int:month>/', views.EmployeeMonthlyAttendanceView.as_view(), name='employee-calendar'),
 ]
