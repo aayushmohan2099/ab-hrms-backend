@@ -30,12 +30,16 @@ class EmployeeMonthlyAttendanceSerializer(serializers.ModelSerializer):
     daily_records = serializers.SerializerMethodField()
     present_summary = serializers.SerializerMethodField()
     current_month_records = serializers.SerializerMethodField()
+    
+    # ---> NEW SURGICAL ADDITION 3 <---
+    yearly_leave_balances = serializers.SerializerMethodField()
 
     class Meta:
         model = EmployeeProfile
         fields = [
             'id', 'employee_code', 'first_name', 'last_name', 'theme',
-            'designation_name', 'present_summary', 'daily_records', 'total_leaves_this_month', 'current_month_records'
+            'designation_name', 'present_summary', 'daily_records', 'total_leaves_this_month', 'current_month_records',
+            'yearly_leave_balances' # ---> ADDED HERE <---
         ]
 
     def get_current_month_records(self, obj):
@@ -62,9 +66,14 @@ class EmployeeMonthlyAttendanceSerializer(serializers.ModelSerializer):
         records = getattr(obj, 'current_month_records', [])
         total_days = getattr(obj, 'total_days_in_month', len(records))
         # Count days that contribute to "Presence" / "Effective Days"
-        present_count = sum(1 for r in records if r.status in ['PRESENT', 'PAID_LEAVE', 'HOLIDAY'])
+        present_count = sum(1 for r in records if r.status in ['PRESENT', 'CASUAL', 'HOLIDAY', 'WEEKEND', 'EARNED', 'SICK'])
         return f"{present_count}/{total_days}"
 
+    # ---> NEW SURGICAL ADDITION 4 <---
+    def get_yearly_leave_balances(self, obj):
+        return getattr(obj, 'yearly_leave_balances', {})
+
+    
 # =====================================================
 # LEAVE APPLICATIONS
 # =====================================================

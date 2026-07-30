@@ -4,6 +4,7 @@ import io
 import requests
 import calendar
 from datetime import date, timedelta, datetime
+from django.db import models
 from django.db.models import Sum, Q, F
 from django.utils import timezone
 from calendar import monthrange
@@ -48,6 +49,24 @@ class DepartmentMonthlyAttendanceView(APIView):
         _, last_day = monthrange(year, month)
         end_date = date(year, month, last_day)
 
+        # ---> NEW SURGICAL ADDITION 1: Fetch & Aggregate Yearly Leave Counts <---
+        leave_statuses = ["MATERNITY", "CASUAL", "SICK", "EARNED", "LWP", "ESL", "ABSENT"]
+        
+        yearly_leave_records = DailyAttendance.objects.filter(
+            employee__department_id=dept_id,
+            date__year=year,
+            status__in=leave_statuses,
+            is_active=True
+        ).values('employee_id', 'status').annotate(count=models.Count('id'))
+
+        yearly_leaves_by_emp = {}
+        for record in yearly_leave_records:
+            emp_id = record['employee_id']
+            if emp_id not in yearly_leaves_by_emp:
+                yearly_leaves_by_emp[emp_id] = {s: 0 for s in leave_statuses}
+            yearly_leaves_by_emp[emp_id][record['status']] = record['count']
+        # ---> END SURGICAL ADDITION 1 <---
+
         # Fetch all attendance records for this department for the given month/year
         daily_records = DailyAttendance.objects.filter(
             employee__department_id=dept_id,
@@ -91,10 +110,13 @@ class DepartmentMonthlyAttendanceView(APIView):
             emp.total_leaves_this_month = leaves_by_emp.get(emp.id, 0)
             emp.current_month_leave_applications = leave_apps_by_emp.get(emp.id, []) # Used by get_current_month_records
             emp.total_days_in_month = last_day
+            
+            # ---> NEW SURGICAL ADDITION 2: Attach yearly balance to employee <---
+            emp.yearly_leave_balances = yearly_leaves_by_emp.get(emp.id, {s: 0 for s in leave_statuses})
+            # ---> END SURGICAL ADDITION 2 <---
 
         serializer = EmployeeMonthlyAttendanceSerializer(employees, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
-
 
 # =====================================================
 # LEAVE APPLICATION WORKFLOW
@@ -615,26 +637,28 @@ class EmployeeLeaveBalanceView(APIView):
                         cl_taken_h2 += (h2_oe - h2_os).days + 1
 
         # ---> NEW SURGICAL ADDITION: Process Bulk Upload AttendanceRecords <---
-        # Fetch verified/uploaded attendance records for this calendar year
-        att_records = AttendanceRecord.objects.filter(
+        # Count DailyAttendance Leave Records <---
+        daily_leave_records = DailyAttendance.objects.filter(
             employee=employee,
-            upload__att_year=current_year,
-            is_active=True
-        ).select_related('upload')
+            date__range=[year_start, year_end],
+            is_active=True,
+        )
 
-        for att in att_records:
-            month = att.upload.att_month
-            
-            # Map standard record fields to the tracking dictionary
-            taken_dict["CASUAL"] += att.casual_leave
-            taken_dict["SICK"] += att.sick_leave
-            taken_dict["EARNED"] += att.paid_leave  # Assuming paid_leave maps to EARNED limit
-            
-            # Apply CL H1/H2 rules based on the upload month
-            if month <= 6:
-                cl_taken_h1 += att.casual_leave
-            else:
-                cl_taken_h2 += att.casual_leave
+        for record in daily_leave_records:
+            if record.status == "EARNED":
+                taken_dict["EARNED"] += 1
+
+            elif record.status == "SICK":
+                taken_dict["SICK"] += 1
+
+            elif record.status == "CASUAL":
+                taken_dict["CASUAL"] += 1
+
+                if record.date.month <= 6:
+                    cl_taken_h1 += 1
+                else:
+                    cl_taken_h2 += 1
+                    
         # ---> END SURGICAL ADDITION <---
         
         # 6. Construct Final Balance Dictionary

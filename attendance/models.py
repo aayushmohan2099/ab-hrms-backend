@@ -77,9 +77,12 @@ class DailyAttendance(SoftDeleteMixin):
         ("ABSENT", "Absent"),
         ("WEEKEND", "Weekend (Saturday/Sunday)"),
         ("HOLIDAY", "Public Holiday"),
-        ("PAID_LEAVE", "Paid Leave"),
-        ("CASUAL_LEAVE", "Casual Leave"),
-        ("SICK_LEAVE", "Sick Leave"),
+        ("MATERNITY", "Maternity Leave (ML)"),
+        ("CASUAL", "Casual Leave (CL)"),
+        ("SICK", "Sick Leave (SL)"),
+        ("EARNED", "Earned Leave (EL)"),
+        ("LWP", "Leave Without Pay (LWP)"),
+        ("ESL", "Extraordinary Sick Leave (ESL)"),        
     )
 
     employee = models.ForeignKey(
